@@ -1,8 +1,3 @@
-# MetaTrader5-Connector
-MetaTrader5 Connector
-
-# BSD-C3 License
-
 # MetaTrader5 Connector
 If free data is desired, MT5 is likely the best choice
 
