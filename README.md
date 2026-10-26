@@ -13,9 +13,13 @@ scan any open trades with empty S/L value and fill with 98% of entry value
 
 Broker server only follows S/L values. Trailing stop is a client side compute loop
 Trailing Stop is guarding floating profit
+
 It keeps raising Stop Loss hurdle, if market price moves favorably
+
 Stop Loss is the only permanent loss guard against math asymmetry
+
 Over 25% loss from entry price is more difficult to recoup
+
 50% loss requires 100% profit to recoup flat
 
 # Some EA/Onnx model pairs to show MT5 native Onnx inference driven trading
