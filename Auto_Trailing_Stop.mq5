@@ -1,27 +1,46 @@
 //+------------------------------------------------------------------+
-//|  AI_Trader_ML_LLM.mq5
+//|  Auto_Trailing_Stop.mq5
+//|  
 //|  Copyright Su Nie | BSD-3C License | https://github.com/can87683
+//|  
+//+------------------------------------------------------------------+
+//|  Two-layer design:                                               |
+//|                                                                  |
+//|  1. STOP LOSS (loss control)                                     |
+//|     Fixed % from entry, set at/after open, invariant.            |
+//|     Its job: bound the loss on a losing trade.                   |
+//|     Its failure mode must be "never absent".                     |
+//|                                                                  |
+//|  2. PROFIT PROTECTION (floating-profit guard)                    |
+//|     Engages only once the trade is in profit by TriggerPercent,  |
+//|     then ratchets the S/L in StepPercent increments.             |
+//|     Its job: convert floating profit into realized profit.       |
+//|     It never operates in the loss region by construction.        |
+//|                                                                  |
+//|  Both write the same broker field (POSITION_SL), but they serve  |
+//|  opposite intents and live in disjoint price regions. Keeping    |
+//|  that distinction explicit prevents the two from being merged    |
+//|  into one fuzzy "stop" that does neither job cleanly.            |
 //+------------------------------------------------------------------+
 
 #property strict
-#property version "2.20"
+#property version "2.40"
 
 #include <Trade/Trade.mqh>
 
-//--- Percentage Trailing
-input group "Percentage Trailing"
+//--- Profit Protection (guards floating profit, not loss)
+input group "Profit Protection"
 input double TriggerPercent = 5.0;
-input double TrailPercent = 2.0;
-input double StepPercent = 2.0;
+input double StepPercent = 0.5;
 input bool ManageAllSymbols = true;
-input bool DrawTrailLine = true;
+input bool DrawProfitGuardLine = true;
 
-//--- Risk Management
-input group "Risk Management"
+//--- Loss Control / Risk Management
+input group "Loss Control / Risk Management"
 input double DefaultStopLossPercent = 2.0;
 input bool UseMaxSpreadFilter = true;
 input double MaxSpreadPercent = 0.10;
-input int MaxOpenPositions = 10;
+input int MaxOpenPositions = 10;   // entry-side use only; does not gate profit protection
 input bool UseEquityDrawdownProtection = false;
 input double MaxEquityDrawdownPercent = 10.0;
 input bool ClosePositionsOnDrawdown = false;
@@ -35,9 +54,7 @@ bool DrawdownTriggered = false;
 int OnInit()
 {
    if(TriggerPercent <= 0.0 ||
-      TrailPercent <= 0.0 ||
       StepPercent <= 0.0 ||
-      TrailPercent > TriggerPercent ||
       DefaultStopLossPercent <= 0.0 ||
       DefaultStopLossPercent >= 100.0 ||
       MaxSpreadPercent <= 0.0 ||
@@ -126,12 +143,12 @@ bool CheckEquityDrawdown()
 }
 
 //+------------------------------------------------------------------+
-bool RiskManagementAllowsTrailing(const string symbol)
+// Profit protection is allowed only when the account is not in a
+// protected-drawdown state and the spread is not hostile. These are
+// market-state conditions, not trade-count conditions.
+bool ProfitProtectionAllowed(const string symbol)
 {
    if(!CheckEquityDrawdown())
-      return false;
-
-   if(PositionsTotal() > MaxOpenPositions)
       return false;
 
    if(UseMaxSpreadFilter)
@@ -198,12 +215,13 @@ double NormalizeStopPrice(const string symbol,
 }
 
 //+------------------------------------------------------------------+
-bool AddDefaultStopLoss(const ulong ticket,
-                        const string symbol,
-                        const long type,
-                        const double openPrice,
-                        const double currentTP,
-                        const MqlTick &tick)
+// Loss control: ensure the invariant loss boundary exists.
+bool EnsureDefaultStopLoss(const ulong ticket,
+                           const string symbol,
+                           const long type,
+                           const double openPrice,
+                           const double currentTP,
+                           const MqlTick &tick)
 {
    double requestedSL;
 
@@ -263,13 +281,13 @@ bool AddDefaultStopLoss(const ulong ticket,
 }
 
 //+------------------------------------------------------------------+
-void UpdateTrailLine(const ulong ticket,
-                     const double stopPrice)
+void UpdateProfitGuardLine(const ulong ticket,
+                           const double stopPrice)
 {
-   if(!DrawTrailLine)
+   if(!DrawProfitGuardLine)
       return;
 
-   string lineName = "CUSTOM_TS_" + IntegerToString((long)ticket);
+   string lineName = "PROFIT_GUARD_" + IntegerToString((long)ticket);
 
    if(ObjectFind(0, lineName) < 0)
    {
@@ -282,15 +300,17 @@ void UpdateTrailLine(const ulong ticket,
 }
 
 //+------------------------------------------------------------------+
-void ManageTrailing(const ulong ticket,
-                    const string symbol,
-                    const long type,
-                    const double openPrice,
-                    const double currentSL,
-                    const double currentTP,
-                    const MqlTick &tick)
+// Profit protection: ratchet the S/L up behind favorable price.
+// Engages only when the trade is already in profit by TriggerPercent.
+void ManageProfitProtection(const ulong ticket,
+                            const string symbol,
+                            const long type,
+                            const double openPrice,
+                            const double currentSL,
+                            const double currentTP,
+                            const MqlTick &tick)
 {
-   if(!RiskManagementAllowsTrailing(symbol))
+   if(!ProfitProtectionAllowed(symbol))
       return;
 
    double favorablePercent;
@@ -302,15 +322,19 @@ void ManageTrailing(const ulong ticket,
       favorablePercent =
          (openPrice - tick.ask) / openPrice * 100.0;
 
+   // Below trigger the trade is not yet winning: the default S/L
+   // (loss control) governs entirely. Profit protection stays idle.
    if(favorablePercent < TriggerPercent)
       return;
 
+   // Number of completed steps beyond the trigger.
    double steps = MathFloor(
-      (favorablePercent - TriggerPercent) / StepPercent
+      (favorablePercent - TriggerPercent) / StepPercent + 1e-9
    );
 
+   // Lock the full distance reached above the trigger.
    double lockedPercent =
-      TriggerPercent - TrailPercent + steps * StepPercent;
+      TriggerPercent + steps * StepPercent;
 
    if(lockedPercent <= 0.0)
       return;
@@ -350,7 +374,7 @@ void ManageTrailing(const ulong ticket,
 
    if(!trade.PositionModify(ticket, newSL, currentTP))
    {
-      Print("Trailing SL modification failed. Ticket=", ticket,
+      Print("Profit guard S/L modification failed. Ticket=", ticket,
             " Retcode=", trade.ResultRetcode(),
             " ", trade.ResultRetcodeDescription());
       return;
@@ -361,15 +385,15 @@ void ManageTrailing(const ulong ticket,
    if(retcode != TRADE_RETCODE_DONE &&
       retcode != TRADE_RETCODE_NO_CHANGES)
    {
-      Print("Trailing SL rejected. Ticket=", ticket,
+      Print("Profit guard S/L rejected. Ticket=", ticket,
             " Retcode=", retcode,
             " ", trade.ResultRetcodeDescription());
       return;
    }
 
-   UpdateTrailLine(ticket, newSL);
+   UpdateProfitGuardLine(ticket, newSL);
 
-   Print("Trailing S/L updated. Ticket=", ticket,
+   Print("Profit guard S/L updated. Ticket=", ticket,
          " Symbol=", symbol,
          " S/L=", DoubleToString(
             newSL,
@@ -424,10 +448,10 @@ void OnTick()
       if(tick.bid <= 0.0 || tick.ask <= 0.0)
          continue;
 
-      // Repair missing S/L before evaluating trailing.
+      // Loss control first: repair a missing S/L before profit protection.
       if(currentSL == 0.0)
       {
-         if(!AddDefaultStopLoss(
+         if(!EnsureDefaultStopLoss(
                ticket, symbol, type,
                openPrice, currentTP, tick))
             continue;
@@ -439,7 +463,7 @@ void OnTick()
          currentTP = PositionGetDouble(POSITION_TP);
       }
 
-      ManageTrailing(
+      ManageProfitProtection(
          ticket,
          symbol,
          type,
@@ -450,4 +474,4 @@ void OnTick()
       );
    }
 }
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+----------------------------+
