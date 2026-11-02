@@ -2,49 +2,167 @@
 # nuitka_compile.py
 # Copyright Su Nie | BSD-3C License | https://github.com/can87683
 
+# pip install zstandard
+# pip install "Nuitka[onefile]"
+# pip install nuitka --upgrade
+
 import sys
 import ast
 import shutil
 import subprocess
 from pathlib import Path
 
+
 class NuitkaCompiler:
     IMPORT_TO_PACKAGE = {
-        "cv2": "opencv-python", "PIL": "Pillow", "sklearn": "scikit-learn",
-        "yaml": "PyYAML", "bs4": "beautifulsoup4", "attr": "attrs",
-        "dateutil": "python-dateutil", "dotenv": "python-dotenv", "jwt": "PyJWT",
-        "Crypto": "pycryptodome", "serial": "pyserial", "usb": "pyusb", "wx": "wxPython",
+        "cv2": "opencv-python",
+        "PIL": "Pillow",
+        "sklearn": "scikit-learn",
+        "yaml": "PyYAML",
+        "bs4": "beautifulsoup4",
+        "attr": "attrs",
+        "dateutil": "python-dateutil",
+        "dotenv": "python-dotenv",
+        "jwt": "PyJWT",
+        "Crypto": "pycryptodome",
+        "serial": "pyserial",
+        "usb": "pyusb",
+        "wx": "wxPython",
     }
 
     PROBLEMATIC_PACKAGES = [
-        "torch", "tensorflow",
-        "keras", "sklearn", "cv2", "bokeh", "plotly", "seaborn", "statsmodels", "xgboost",
-        "lightgbm", "catboost", "spacy", "nltk", "transformers", "flask", "django", "fastapi",
-        "sqlalchemy", "psycopg2", "pymongo", "redis", "celery", "boto3", "botocore", "awscli",
-        "azure", "google.cloud", "grpc", "protobuf", "cryptography", "paramiko", "fabric",
-        "ansible", "pytest", "unittest", "nose", "hypothesis", "jupyter", "ipython", "notebook",
-        "lab", "sphinx", "mkdocs",
+        "torch",
+        "tensorflow",
+        "keras",
+        "sklearn",
+        "cv2",
+        "bokeh",
+        "plotly",
+        "seaborn",
+        "statsmodels",
+        "xgboost",
+        "lightgbm",
+        "catboost",
+        "spacy",
+        "nltk",
+        "transformers",
+        "flask",
+        "django",
+        "fastapi",
+        "sqlalchemy",
+        "psycopg2",
+        "pymongo",
+        "redis",
+        "celery",
+        "boto3",
+        "botocore",
+        "awscli",
+        "azure",
+        "google.cloud",
+        "grpc",
+        "protobuf",
+        "cryptography",
+        "paramiko",
+        "fabric",
+        "ansible",
+        "pytest",
+        "unittest",
+        "nose",
+        "hypothesis",
+        "jupyter",
+        "ipython",
+        "notebook",
+        "lab",
+        "sphinx",
+        "mkdocs",
     ]
 
     SAFE_PIL_EXCLUDES = [
-        "PIL._avif", "PIL._webp", "PIL.ImageQt", "PIL._imagingmorph",
-        "PIL._imagingmath", "PIL._imagingcms", "PIL._tkinter_finder"
+        "PIL._avif",
+        "PIL._webp",
+        "PIL.ImageQt",
+        "PIL._imagingmorph",
+        "PIL._imagingmath",
+        "PIL._imagingcms",
     ]
 
     DATA_EXTENSIONS = {
-        ".csv", ".json", ".xml", ".yaml", ".yml", ".txt", ".ini", ".cfg",
-        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".ttf", ".otf"
+        ".csv",
+        ".json",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".txt",
+        ".ini",
+        ".cfg",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".svg",
+        ".ttf",
+        ".otf",
     }
 
     STDLIB_MODULES = {
-        "os", "sys", "math", "json", "csv", "time", "datetime", "threading", "queue",
-        "configparser", "logging", "typing", "dataclasses", "socket", "subprocess",
-        "shlex", "webbrowser", "ast", "shutil", "pathlib", "io", "re", "collections",
-        "itertools", "functools", "abc", "contextlib", "copy", "enum", "hashlib", "hmac",
-        "html", "http", "inspect", "keyword", "linecache", "locale", "operator", "pickle",
-        "platform", "pprint", "random", "signal", "string", "struct", "tempfile", "textwrap",
-        "traceback", "types", "urllib", "uuid", "warnings", "weakref", "xml", "zipfile",
-        "zipimport", "PIL"
+        "os",
+        "sys",
+        "math",
+        "json",
+        "csv",
+        "time",
+        "datetime",
+        "threading",
+        "queue",
+        "configparser",
+        "logging",
+        "typing",
+        "dataclasses",
+        "socket",
+        "subprocess",
+        "shlex",
+        "webbrowser",
+        "ast",
+        "shutil",
+        "pathlib",
+        "io",
+        "re",
+        "collections",
+        "itertools",
+        "functools",
+        "abc",
+        "contextlib",
+        "copy",
+        "enum",
+        "hashlib",
+        "hmac",
+        "html",
+        "http",
+        "inspect",
+        "keyword",
+        "linecache",
+        "locale",
+        "operator",
+        "pickle",
+        "platform",
+        "pprint",
+        "random",
+        "signal",
+        "string",
+        "struct",
+        "tempfile",
+        "textwrap",
+        "traceback",
+        "types",
+        "urllib",
+        "uuid",
+        "warnings",
+        "weakref",
+        "xml",
+        "zipfile",
+        "zipimport",
+        "PIL",
     }
 
     def __init__(self, script_path: Path, output_name: str = ""):
@@ -72,11 +190,22 @@ class NuitkaCompiler:
             if imp not in self.STDLIB_MODULES and imp not in exclude
         ]
 
-        missing = [pkg for pkg in missing if subprocess.call([sys.executable, "-c", f"import {pkg.split('-')[0]}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0]
+        missing = [
+            pkg
+            for pkg in missing
+            if subprocess.call(
+                [sys.executable, "-c", f"import {pkg.split('-')[0]}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            != 0
+        ]
 
         if missing:
             print(f"==> Installing missing packages: {', '.join(missing)}")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet"] + missing)
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet"] + missing
+            )
 
     def detect_gui_plugin(self, imports: set) -> str:
         if "customtkinter" in imports or "tkinter" in imports:
@@ -101,7 +230,9 @@ class NuitkaCompiler:
 
     def build(self):
         imports = self.scan_imports()
-        print(f"==> Detected imports: {', '.join(sorted(imports)) if imports else 'none'}")
+        print(
+            f"==> Detected imports: {', '.join(sorted(imports)) if imports else 'none'}"
+        )
 
         final_exclude = set(self.PROBLEMATIC_PACKAGES)
         self.install_missing(imports, final_exclude)
@@ -121,9 +252,14 @@ class NuitkaCompiler:
                 shutil.rmtree(p)
 
         cmd = [
-            sys.executable, "-m", "nuitka", "--standalone", "--onefile",
-            "--assume-yes-for-downloads", "--enable-plugin=anti-bloat",
-            "--remove-output"
+            sys.executable,
+            "-m",
+            "nuitka",
+            "--standalone",
+            "--onefile",
+            "--assume-yes-for-downloads",
+            "--enable-plugin=anti-bloat",
+            "--remove-output",
         ]
 
         if self.is_win:
@@ -146,17 +282,23 @@ class NuitkaCompiler:
             cmd.append(f"--nofollow-import-to={exc}")
 
         for imp in imports:
-            if imp not in self.STDLIB_MODULES and imp not in final_exclude and imp != "PIL":
+            if (
+                imp not in self.STDLIB_MODULES
+                and imp not in final_exclude
+                and imp != "PIL"
+            ):
                 cmd.append(f"--include-module={imp}")
 
         for data_file in data_files:
             cmd.append(f"--include-data-files={data_file}={data_file}")
 
-        cmd.extend([
-            "--output-dir=dist",
-            f"--output-filename={self.output_name}",
-            str(self.script_path)
-        ])
+        cmd.extend(
+            [
+                "--output-dir=dist",
+                f"--output-filename={self.output_name}",
+                str(self.script_path),
+            ]
+        )
 
         print("==> Running Nuitka...")
         subprocess.check_call(cmd)
