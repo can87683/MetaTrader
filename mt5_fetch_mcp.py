@@ -983,51 +983,50 @@ class Mt5McpClient(ctk.CTkFrame):
         return result
 
     def mcp_connect(self) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(2.0)
+            refused = probe.connect_ex((self.server_ip, int(self.port)))
+        if refused:
+            self.after(0, self.log,
+                       f"[MCP] {self.server_ip}:{self.port} unreachable "
+                       f"(errno {refused}), retrying...")
+            return False
+
         init_payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {
                 "protocolVersion": self.PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {
-                    "name": self.CLIENT_NAME,
-                    "version": self.CLIENT_VERSION,
-                },
+                "clientInfo": {"name": self.CLIENT_NAME,
+                               "version": self.CLIENT_VERSION},
             },
         }
-        response = self._mcp_raw_post(init_payload)
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"[MCP] initialize failed: HTTP {response.status_code}"
-            )
+        r = self._mcp_raw_post(init_payload, timeout=self.HTTP_TIMEOUT)
 
-        sid = response.headers.get("Mcp-Session-Id")
+        if r.status_code != 200:
+            self.after(0, self.log,
+                       f"[MCP] initialize failed: HTTP {r.status_code}")
+            return False
+        sid = r.headers.get("Mcp-Session-Id")
         if sid:
             self.session_id = sid
-
-        body = self._mcp_parse_response(response, request_id=1)
+        body = self._mcp_parse_response(r, request_id=1)
         if not body or "result" not in body:
-            raise RuntimeError("[MCP] initialize returned no result")
-
+            self.after(0, self.log, "[MCP] initialize returned no result")
+            return False
         result = body["result"]
         self.protocol_version = result.get("protocolVersion")
         self.server_info = result.get("serverInfo", {})
-
         self._mcp_raw_post(
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        )
+            timeout=self.HTTP_TIMEOUT)
 
         self.connected = True
-        self.log(
-            f"[MCP] Connected to {self.scheme}://"
-            f"{self.server_ip}:{self.port}{self.endpoint}",
-        )
-
-        self.refresh_tool_registry()
-
+        self.after(0, self.log,
+                   f"[MCP] Connected to {self.scheme}://"
+                   f"{self.server_ip}:{self.port}{self.endpoint}")
         if callable(self.on_connect_success):
-            self.on_connect_success()
+            self.after(0, self.on_connect_success)
         return True
 
     def mcp_disconnect(self):

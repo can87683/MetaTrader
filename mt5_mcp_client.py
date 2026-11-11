@@ -778,6 +778,15 @@ class Mt5McpClient(ctk.CTkFrame):
         return result
 
     def mcp_connect(self) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(2.0)
+            refused = probe.connect_ex((self.server_ip, int(self.port)))
+        if refused:
+            self.after(0, self.log,
+                       f"[MCP] {self.server_ip}:{self.port} unreachable "
+                       f"(errno {refused}), retrying...")
+            return False
+
         init_payload = {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {
@@ -787,7 +796,7 @@ class Mt5McpClient(ctk.CTkFrame):
                                "version": self.CLIENT_VERSION},
             },
         }
-        r = self._mcp_raw_post(init_payload, timeout=self.KEEP_ALIVE_TIMEOUT_SEC)
+        r = self._mcp_raw_post(init_payload, timeout=self.HTTP_TIMEOUT)
 
         if r.status_code != 200:
             self.after(0, self.log,
@@ -805,12 +814,9 @@ class Mt5McpClient(ctk.CTkFrame):
         self.server_info = result.get("serverInfo", {})
         self._mcp_raw_post(
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
-            timeout=self.KEEP_ALIVE_TIMEOUT_SEC)
+            timeout=self.HTTP_TIMEOUT)
 
         self.connected = True
-        self._keep_alive_failures = 0
-        self._reconnect_attempt = 0
-        self.after(0, self._start_keep_alive)
         self.after(0, self.log,
                    f"[MCP] Connected to {self.scheme}://"
                    f"{self.server_ip}:{self.port}{self.endpoint}")
